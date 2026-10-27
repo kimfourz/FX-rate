@@ -10,6 +10,7 @@
   W2 = 송금중 요약의 'WISE,USD' 합계 그대로
   N1 = 송금중 요약의 'NIUM,USD' 합계 그대로  (CURRENCY_CLOUD 송금중 금액은 제외)
   국가 = 통화 → 국가명 (NAMED에 없는 통화는 '코어국가')
+  Awaiting이 0인 파트너는 줄을 뺌 (셋 다 0이면 'Awaiting Funds 없음')
 """
 import datetime, json, re, sys
 
@@ -74,7 +75,10 @@ def countries(ccys):
 
 def main(cc_path, st_path, rates_path):
     balance = parse_balance(open(cc_path, encoding="utf-8").read())
-    w2, n1, wise, nium = parse_remit(open(st_path, encoding="utf-8").read())
+    st_text = open(st_path, encoding="utf-8").read()
+    w2, n1, wise, nium = parse_remit(st_text)
+    # 송금중 요약 자체는 찾았는데 파트너 줄이 없으면 = 그 파트너는 Awaiting 없음 (오류 아님)
+    st_found = bool(re.search(r"송금중|Core-Ready|USD 합계", st_text))
     rj = json.load(open(rates_path, encoding="utf-8"))
     rates = dict(rj["usd_per_unit"])
     rates["USD"] = 1.0
@@ -97,12 +101,16 @@ def main(cc_path, st_path, rates_path):
                 dust.append(ccy)
 
     asof = datetime.datetime.now(KST).strftime("%m/%d %H:%M")
-    lines = [
-        f"파트너사별 Awaiting Funds ({asof} 기준)",
-        f"• C4 {fmt(abs(c4))} USD ({countries(c4ccys)})",
-        f"• W2 {fmt(w2) if w2 is not None else '?'} USD ({countries(wise)})",
-        f"• N1 {fmt(n1) if n1 is not None else '?'} USD ({countries(nium)})",
-    ]
+    # Awaiting이 없는(0인) 파트너는 줄을 빼고 표시
+    lines = [f"파트너사별 Awaiting Funds ({asof} 기준)"]
+    if round(abs(c4), 2) > 0:
+        lines.append(f"• C4 {fmt(abs(c4))} USD ({countries(c4ccys)})")
+    if w2:
+        lines.append(f"• W2 {fmt(w2)} USD ({countries(wise)})")
+    if n1:
+        lines.append(f"• N1 {fmt(n1)} USD ({countries(nium)})")
+    if len(lines) == 1:
+        lines.append("• Awaiting Funds 없음")
 
     fetched = datetime.datetime.strptime(rj["fetched_at_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
     age_h = (datetime.datetime.now(datetime.timezone.utc) - fetched).total_seconds() / 3600
@@ -110,8 +118,8 @@ def main(cc_path, st_path, rates_path):
         warns.append(f"⚠ 환율이 제때 업데이트되지 않아 이전 환율을 사용했어요 (조회 시각 {rj['fetched_at_kst']} KST).")
     if missing:
         warns.append(f"⚠ 환율이 없는 통화가 있어 C4에서 빠졌어요: {', '.join(missing)}")
-    if w2 is None or n1 is None:
-        warns.append("⚠ #settlement에서 WISE/NIUM USD 합계를 읽지 못했어요.")
+    if not st_found:
+        warns.append("⚠ #settlement 송금중 요약을 찾지 못해 W2/N1이 빠졌어요.")
     if dust:  # 소액 통화는 오류가 아니라서 Slack 메시지에는 넣지 않음
         print(f"참고: C4에 100 USD 미만 소액 통화 포함: {', '.join(dust)}", file=sys.stderr)
 
