@@ -3,19 +3,21 @@ name: fetch-fx-rates
 on:
   schedule:
     # GitHub 시간은 UTC 기준 (한국시간 = UTC + 9시간)
-    # GitHub 예약 실행은 몇 시간씩 늦어질 수 있어서 발송 전에 여러 번 실행한다
-    - cron: "25 14 * * 0-5"   # 월~토 발송 전날 23:25 KST
+    # GitHub 예약 실행은 몇 시간씩 늦거나 건너뛰어서, 전날 저녁부터 여러 번 걸어둔다.
+    # 한 번이라도 시작되면 05:45까지 계속 돌면서 환율을 새로 저장한다 (아래 jobs 참고).
+    - cron: "25 9 * * 0-5"    # 월~토 발송 전날 18:25 KST
+    - cron: "25 11 * * 0-5"   # 월~토 발송 전날 20:25 KST
+    - cron: "25 13 * * 0-5"   # 월~토 발송 전날 22:25 KST
     - cron: "25 15 * * 0-5"   # 월~토 00:25 KST
-    - cron: "25 16 * * 0-5"   # 월~토 01:25 KST
-    - cron: "25 18 * * 0-5"   # 월~토 03:25 KST
-    - cron: "25 20 * * 0-5"   # 월~토 05:25 KST
+    - cron: "25 17 * * 0-5"   # 월~토 02:25 KST
+    - cron: "25 19 * * 0-5"   # 월~토 04:25 KST
     # 주말엔 외환시장이 닫혀 환율이 거의 그대로라 토요일 오전에만 받아두고 토·일 계산에 같이 쓴다
     - cron: "25 23 * * 5"     # 토 08:25 KST
     - cron: "25 1 * * 6"      # 토 10:25 KST
     - cron: "25 3 * * 6"      # 토 12:25 KST
   workflow_dispatch:          # 수동 실행 버튼 (테스트용)
 
-# 늦어진 실행들이 한꺼번에 몰려도 하나씩 차례로 돌게 해서 저장(push) 충돌을 막는다
+# 실행이 겹치면 앞의 실행이 끝날 때까지 기다렸다가 이어서 돈다 (저장 충돌 방지 + 새벽까지 이어달리기)
 concurrency:
   group: fetch-fx-rates
   cancel-in-progress: false
@@ -26,18 +28,47 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
-      - name: 환율 조회
-        run: python3 fetch_rates.py
+      - name: 환율 조회·저장 (새벽 05:45까지 반복)
         env:
           OXR_APP_ID: ${{ secrets.OXR_APP_ID }}
-
-      - name: rates.json 저장
         run: |
+          set +e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rates.json
-          git commit -m "update rates $(date -u +%Y-%m-%dT%H:%MZ)" || echo "변경 없음"
-          git push
+
+          save() {
+            python3 fetch_rates.py \
+              && git add rates.json \
+              && { git commit -q -m "update rates $(date -u +%Y-%m-%dT%H:%MZ)" || true; } \
+              && git pull -q --rebase \
+              && git push -q \
+              || echo "이번 회차 저장 실패 - 다음 회차에 다시 시도"
+          }
+
+          start=$(date +%s)
+          cap=$((start + 345*60))   # 한 번 실행은 최대 5시간 45분까지만
+          h=$((10#$(TZ=Asia/Seoul date +%H)))
+
+          # 낮(06~17시)에 늦게 시작된 실행은 한 번만 받고 끝낸다
+          if [ $h -ge 6 ] && [ $h -lt 17 ]; then save; exit 0; fi
+
+          # 다음 05:45 KST까지 반복
+          dl=$(TZ=Asia/Seoul date -d "today 05:45" +%s)
+          [ "$start" -ge "$dl" ] && dl=$(TZ=Asia/Seoul date -d "tomorrow 05:45" +%s)
+          end=$(( dl < cap ? dl : cap ))
+          echo "반복 종료 예정: $(TZ=Asia/Seoul date -d @$end '+%m/%d %H:%M') KST"
+
+          while true; do
+            save
+            now=$(date +%s)
+            left=$((end - now))
+            if [ $left -le 60 ]; then break; fi
+            # 발송 3시간 전까지는 1시간마다, 그 뒤로는 20분마다
+            if [ $((dl - now)) -gt 10800 ]; then s=3600; else s=1200; fi
+            if [ $s -gt $left ]; then s=$left; fi
+            sleep $s
+          done
