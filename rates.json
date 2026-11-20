@@ -1,8 +1,8 @@
 {
  "source": "Open Exchange Rates",
  "rate_time_kst": "2026-11-21 03:00",
- "fetched_at_utc": "2026-11-20T18:15:03Z",
- "fetched_at_kst": "2026-11-21 03:15",
+ "fetched_at_utc": "2026-11-20T18:35:05Z",
+ "fetched_at_kst": "2026-11-21 03:35",
  "usd_per_unit": {
   "AED": 0.2722570106,
   "AFN": 0.0155038745,
